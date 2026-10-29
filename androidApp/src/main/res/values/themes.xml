@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Criba" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/criba_fondo</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+    <color name="criba_fondo">#FFF7F8FA</color>
+    <color name="criba_icono_fondo">#FF1F4FA8</color>
+</resources>
