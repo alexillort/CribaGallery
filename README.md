@@ -1,54 +1,36 @@
 # Criba
 
-Galería rápida para tus fotos de OneDrive, en **Android** y **Windows**, con la misma interfaz.
+Organizador de fotos y documentos para tu PC (Windows). Todo se analiza en tu computadora; no se sube nada.
 
-- Línea de tiempo por día, pellizco para cambiar el tamaño y barra para saltar entre meses.
-- Álbumes a partir de tus carpetas de OneDrive.
-- Selección múltiple para **mover** y **eliminar** (a la papelera de OneDrive).
-- Pestaña **Limpiar**: duplicados exactos, capturas de pantalla, videos pesados y WhatsApp.
-- Rápida porque guarda un índice local y solo pide a OneDrive lo que cambió (delta query). Las miniaturas se guardan en caché (2 GB).
+## Qué hace
+
+**Fotos**
+- Biblioteca por momentos (fecha EXIF real), como Google Fotos, con tamaño de miniatura ajustable.
+- Carpetas como álbumes.
+- Limpiar: duplicados exactos, fotos casi iguales (ráfagas, conserva la más nítida), borrosas, muy oscuras o quemadas, capturas de pantalla, WhatsApp y videos pesados.
+- Visor a pantalla completa: flechas para avanzar, Supr para eliminar, Esc para cerrar.
+
+**Documentos**
+- Agrupados por tipo (PDF, Word, hojas, presentaciones…) y por tema (facturas, contratos, académico…).
+- Limpiar: duplicados, versiones anteriores (final, final2, v1, v2, (1)…), temporales, instaladores, archivos pesados y antiguos.
+
+**Ordenar**
+- Mueve los archivos a `Ordenado/` por año y mes, día u origen (fotos), o por tipo, tema o año (documentos).
+- Vista previa antes de mover y botón para deshacer.
+
+**Seguro**
+- Eliminar manda a la Papelera de reciclaje.
+- Funciona con la carpeta de OneDrive: lo que ordenes se sincroniza solo. Los archivos que están solo en la nube no se descargan.
+
+## Descargar
+
+En **Releases**, `Criba-windows.msi`. Si Windows muestra "Windows protegió su PC", elige *Más información → Ejecutar de todas formas* (la app no está firmada).
 
 ## Cómo se compila
 
-GitHub Actions compila todo en cada cambio a `main` y publica en **Releases**:
-
-- `Criba-android.apk`: ábrelo desde el celular e instálalo (Android pedirá permitir apps de origen desconocido para el navegador).
-- `Criba-windows.msi`: instalador para Windows.
-
-## Configuración (una sola vez)
-
-### 1. Registrar la app en Azure
-
-1. Entra a <https://entra.microsoft.com> → **Aplicaciones** → **Registros de aplicaciones** → **Nuevo registro**.
-   Si es la primera vez con una cuenta personal, Microsoft puede pedirte crear un directorio gratuito.
-2. Nombre: `Criba`. Tipos de cuenta: **Cuentas de cualquier directorio organizativo y cuentas Microsoft personales**.
-3. En **Autenticación** → **Agregar una plataforma**:
-   - **Android**: paquete `app.criba.galeria`, hash de firma `xOCboFTu1LlBh42UY1BkHhM8CZA=`.
-   - **Aplicaciones móviles y de escritorio**: URI de redirección `http://localhost`.
-4. En **Permisos de API** → Microsoft Graph → Permisos delegados → `Files.ReadWrite`.
-5. Copia el **Id. de aplicación (cliente)**.
-
-### 2. Guardar el ID en GitHub
-
-En el repositorio: **Settings → Secrets and variables → Actions → Variables → New repository variable**
-
-- Nombre: `AZURE_CLIENT_ID`
-- Valor: el ID que copiaste.
-
-Luego en **Actions → Compilar Criba → Run workflow**.
-
-## Firma
-
-La llave `firma/criba.keystore` es fija para que el inicio de sesión de Microsoft siempre reconozca la app.
-Está en el repositorio por comodidad: mantén el repositorio **privado**.
+GitHub Actions compila en cada cambio a `main` y publica en Releases.
 
 ## Estructura
 
-- `shared/src`: interfaz (Compose) y lógica común: OneDrive, índice, limpieza.
-- `androidApp`: arranque en Android e inicio de sesión con MSAL.
-- `desktopApp`: arranque en Windows e inicio de sesión con MSAL4J.
-
-## Privacidad
-
-Criba habla directo con Microsoft Graph desde tu dispositivo. No hay servidores intermedios.
-Puedes quitarle el acceso desde tu cuenta Microsoft → Privacidad → Aplicaciones y servicios.
+- `desktopApp/`: Criba para PC (Kotlin + Compose Desktop).
+- `androidApp/` y `shared/`: versión para Android conectada a OneDrive (requiere registrar la app en Azure; en pausa).
