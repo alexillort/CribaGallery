@@ -64,6 +64,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import app.criba.pc.Item
@@ -244,23 +256,33 @@ private fun TopBar(app: AppState) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if (app.sel.isNotEmpty()) {
-            val list = app.selectedItems()
-            IconButton(onClick = { app.sel.clear() }) { Icon(Icons.Filled.Close, contentDescription = "Quitar selección") }
+        if (app.hasSel) {
+            val t = app.selection()
+            val bytes = t.files.sumOf { it.size }
+            IconButton(onClick = { app.clearSel() }) { Icon(Icons.Filled.Close, contentDescription = "Quitar selección") }
             Text(
-                "${list.size} seleccionados · ${fmtBytes(list.sumOf { it.size })}",
+                buildString {
+                    append("${t.count} seleccionados")
+                    if (t.dirs.isNotEmpty()) append(" · ${t.dirs.size} carpeta${if (t.dirs.size == 1) "" else "s"}")
+                    if (bytes > 0) append(" · ${fmtBytes(bytes)}")
+                },
                 style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = { app.selectAllVisible() }) { Text("Seleccionar todo") }
-            if (list.size == 1) TextButton(onClick = { app.reveal(list[0]) }) { Text("Mostrar en carpeta") }
-            OutlinedButton(onClick = { app.chooseAndMove(list) }) {
+            if (t.count == 1) TextButton(onClick = { app.renaming = t.files.firstOrNull()?.path ?: t.dirs.first() }) { Text("Cambiar nombre") }
+            TextButton(onClick = { app.setClip(t, cut = false) }) { Text("Copiar") }
+            TextButton(onClick = { app.setClip(t, cut = true) }) { Text("Cortar") }
+            OutlinedButton(onClick = { app.copyTo(t) }) { Text("Copiar a…") }
+            OutlinedButton(onClick = { app.moveTo(t) }) {
                 Icon(Icons.Filled.DriveFileMove, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.size(6.dp))
                 Text("Mover a…")
             }
             Button(
-                onClick = { app.confirmTrash = list },
+                onClick = { app.askDelete(t) },
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),
             ) {
                 Icon(Icons.Filled.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -304,20 +326,7 @@ private fun TopBar(app: AppState) {
             Icon(Icons.Filled.Image, contentDescription = "Tamaño de las miniaturas", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
         }
         val searchable = review == null && app.section in setOf(Section.LIBRARY, Section.EXPLORE, Section.TYPES, Section.TOPICS)
-        if (searchable) {
-            OutlinedTextField(
-                value = app.query,
-                onValueChange = { app.query = it },
-                placeholder = { Text("Buscar por nombre o carpeta") },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (app.query.isNotEmpty()) IconButton(onClick = { app.query = "" }) { Icon(Icons.Filled.Close, contentDescription = "Borrar búsqueda") }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(28.dp),
-                modifier = Modifier.width(300.dp),
-            )
-        }
+        if (searchable) SearchBox(app)
         IconButton(onClick = { app.rescan() }, enabled = !app.scanning && !app.analyzing) {
             Icon(Icons.Filled.Refresh, contentDescription = "Volver a escanear")
         }
@@ -398,41 +407,7 @@ private fun LibraryView(app: AppState) {
 
 @Composable
 private fun Dialogs(app: AppState) {
-    app.confirmTrash?.let { all ->
-        val list = all.filterNot { app.isProtected(it) }
-        val skipped = all.size - list.size
-        AlertDialog(
-            onDismissRequest = { app.confirmTrash = null },
-            title = {
-                Text(
-                    when {
-                        list.isEmpty() -> "Están en carpetas protegidas"
-                        list.size == 1 -> "¿Eliminar ${list[0].name}?"
-                        else -> "¿Eliminar ${list.size} archivos?"
-                    }
-                )
-            },
-            text = {
-                Text(
-                    if (list.isEmpty()) "Para eliminarlos, primero quita la protección de su carpeta en Explorar."
-                    else "Ocupan ${fmtBytes(list.sumOf { it.size })}. Van a la Papelera de reciclaje, de donde puedes restaurarlos." +
-                        (if (app.isOneDrive) " OneDrive también los manda a su papelera en línea." else "") +
-                        (if (skipped > 0) " $skipped están en carpetas protegidas y no se tocarán." else "")
-                )
-            },
-            confirmButton = {
-                Button(
-                    enabled = list.isNotEmpty(),
-                    onClick = {
-                        app.confirmTrash = null
-                        app.trash(list)
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),
-                ) { Text("Eliminar") }
-            },
-            dismissButton = { TextButton(onClick = { app.confirmTrash = null }) { Text("Cancelar") } },
-        )
-    }
+    FileDialogs(app)
     if (app.showProtected) ProtectedDialog(app)
     app.pendingPlan?.let { plan ->
         AlertDialog(
@@ -491,4 +466,40 @@ private fun ProtectedDialog(app: AppState) {
         confirmButton = { TextButton(onClick = { app.showProtected = false }) { Text("Listo") } },
         dismissButton = { TextButton(onClick = { app.chooseAndProtect() }) { Text("Proteger otra carpeta…") } },
     )
+}
+
+/** Lupa que se despliega en un campo de una sola línea y se recoge al vaciarlo. */
+@Composable
+private fun SearchBox(app: AppState) {
+    var open by remember { mutableStateOf(app.query.isNotEmpty()) }
+    val focus = remember { FocusRequester() }
+    if (!open && app.query.isEmpty()) {
+        IconButton(onClick = { open = true }) { Icon(Icons.Filled.Search, contentDescription = "Buscar") }
+        return
+    }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    val shape = RoundedCornerShape(20.dp)
+    Row(
+        Modifier.width(280.dp).height(40.dp).clip(shape).background(MaterialTheme.colorScheme.surfaceContainer)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape).padding(start = 12.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+        Box(Modifier.weight(1f).padding(horizontal = 8.dp), contentAlignment = Alignment.CenterStart) {
+            if (app.query.isEmpty()) {
+                Text("Buscar", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            }
+            BasicTextField(
+                value = app.query,
+                onValueChange = { app.query = it },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus).onFocusChanged { if (!it.isFocused && app.query.isEmpty()) open = false },
+            )
+        }
+        IconButton(onClick = { app.query = ""; open = false }, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Filled.Close, contentDescription = "Cerrar búsqueda", modifier = Modifier.size(16.dp))
+        }
+    }
 }

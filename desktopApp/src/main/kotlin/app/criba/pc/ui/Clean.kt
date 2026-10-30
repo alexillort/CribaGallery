@@ -199,11 +199,11 @@ fun ReviewView(app: AppState, review: Review) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                TextButton(onClick = { app.review = null; app.sel.clear() }) { Text("Volver") }
+                TextButton(onClick = { app.review = null; app.clearSel() }) { Text("Volver") }
                 Button(
                     enabled = selected > 0,
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),
-                    onClick = { app.confirmTrash = app.selectedItems() },
+                    onClick = { app.askDelete(app.selectedItems()) },
                 ) { Text(if (selected > 0) "Eliminar $selected" else "Nada marcado") }
             }
         }

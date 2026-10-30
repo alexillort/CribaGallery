@@ -127,11 +127,13 @@ object Media {
             }
         } catch (_: Throwable) {
         }
-        return try {
+        val skia = try {
             org.jetbrains.skia.Image.makeFromEncoded(f.readBytes()).toComposeImageBitmap().toAwtImage()
         } catch (_: Throwable) {
             null
         }
+        // HEIC y otros formatos que solo Windows sabe abrir.
+        return skia ?: ShellThumb.get(f.absolutePath, maxOf(target * 2, 256))
     }
 
     /** Escala al lado mayor indicado y endereza según la orientación EXIF. */
@@ -239,13 +241,46 @@ object Media {
         item.dhash = if (hash == 0L) 1L else hash
     }
 
+    private val PREVIEW_DOC_EXT = setOf("pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "odp", "ods", "psd", "ai", "svg", "epub")
+    private val noPreview = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** Fotos, videos, PDF y documentos que Windows sabe mostrar en miniatura. */
+    fun hasPreview(it: Item): Boolean = !it.cloudOnly && (it.kind != Kind.DOC || it.ext in PREVIEW_DOC_EXT)
+
+    private fun makePreview(item: Item) {
+        val f = thumbFile(item)
+        val none = File(f.path + ".none")
+        if (f.exists() || none.exists() || item.path in noPreview) return
+        val img = when {
+            item.ext == "pdf" -> PdfPreview.render(item.file, THUMB * 2) ?: ShellThumb.get(item.path, THUMB)
+            else -> ShellThumb.get(item.path, THUMB)
+        }
+        if (img == null) {
+            noPreview += item.path
+            runCatching { none.parentFile?.mkdirs(); none.createNewFile() }
+            return
+        }
+        val t = fit(img, THUMB, 1)
+        f.parentFile?.mkdirs()
+        val tmp = File(f.path + ".tmp")
+        ImageIO.write(t, "jpg", tmp)
+        if (!tmp.renameTo(f)) {
+            f.delete()
+            tmp.renameTo(f)
+        }
+    }
+
     /** Miniatura para la cuadrícula; la genera si aún no existe. */
     fun loadThumb(item: Item): ImageBitmap? {
-        if (item.kind != Kind.PHOTO || item.cloudOnly) return null
+        if (!hasPreview(item)) return null
         val f = thumbFile(item)
         if (!f.exists()) {
-            if (!item.analyzed) analyze(item)
-            else if (!item.failed) synchronized(item) { runCatching { makeThumb(item) } }
+            if (item.kind == Kind.PHOTO) {
+                if (!item.analyzed) analyze(item)
+                else if (!item.failed) synchronized(item) { runCatching { makeThumb(item) } }
+            } else {
+                synchronized(item) { runCatching { makePreview(item) } }
+            }
         }
         if (!f.exists()) return null
         return try {
@@ -256,7 +291,10 @@ object Media {
     }
 
     fun loadFull(item: Item, maxSide: Int): ImageBitmap? {
-        if (item.kind != Kind.PHOTO || item.cloudOnly) return null
+        if (item.cloudOnly) return null
+        if (item.kind == Kind.VIDEO) return ShellThumb.get(item.path, 1280)?.toComposeImageBitmap()
+        if (item.ext == "pdf") return PdfPreview.render(item.file, maxSide)?.toComposeImageBitmap()
+        if (item.kind != Kind.PHOTO) return null
         val src = decode(item.file, maxSide / 2) ?: return null
         return fit(src, maxSide, item.orientation).toComposeImageBitmap()
     }

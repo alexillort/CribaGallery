@@ -103,9 +103,17 @@ fun DocGrid(app: AppState, rows: List<GRow>, showReasons: Boolean = false) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DocTile(app: AppState, item: Item, showReasons: Boolean) {
+    androidx.compose.foundation.ContextMenuArea(items = { fileMenu(app, item) { app.openFile(item) } }) {
+        DocTileBody(app, item, showReasons)
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DocTileBody(app: AppState, item: Item, showReasons: Boolean) {
+    val preview = rememberThumb(item)
     val selected = app.sel[item.path] == true
     val t = docType(item.ext)
     val reason = if (showReasons) app.report.reasons[item.path] else null
@@ -122,11 +130,18 @@ fun DocTile(app: AppState, item: Item, showReasons: Boolean) {
             .combinedClickable(onClick = { app.toggle(item) }, onDoubleClick = { app.openFile(item) }),
     ) {
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(
-                Modifier.size(46.dp).clip(RoundedCornerShape(8.dp)).background(Color(t.color)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(item.ext.uppercase().take(4).ifEmpty { "—" }, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            if (preview != null) {
+                Box(Modifier.size(width = 52.dp, height = 64.dp).clip(RoundedCornerShape(6.dp)).background(Color.White)) {
+                    androidx.compose.foundation.Image(preview, contentDescription = null, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    TypeBadge(item, Modifier.align(Alignment.BottomStart).padding(2.dp))
+                }
+            } else {
+                Box(
+                    Modifier.size(46.dp).clip(RoundedCornerShape(8.dp)).background(Color(t.color)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(item.ext.uppercase().take(4).ifEmpty { "—" }, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
             }
             Column(Modifier.weight(1f)) {
                 Text(item.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)

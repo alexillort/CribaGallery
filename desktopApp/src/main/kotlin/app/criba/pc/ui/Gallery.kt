@@ -89,7 +89,7 @@ private val ThumbDispatcher = Dispatchers.IO.limitedParallelism(6)
 @Composable
 fun rememberThumb(item: Item): ImageBitmap? {
     val state = produceState(ThumbMemory.get(item.path), item.path) {
-        if (value == null && item.kind == Kind.PHOTO && !item.cloudOnly) {
+        if (value == null && Media.hasPreview(item)) {
             val b = withContext(ThumbDispatcher) { Media.loadThumb(item) }
             if (b != null) ThumbMemory.put(item.path, b)
             value = b
@@ -194,7 +194,7 @@ fun GridHeader(app: AppState, row: HeaderRow) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (group != null && (hovered || app.sel.isNotEmpty())) {
+        if (group != null && (hovered || app.hasSel)) {
             val all = group.all { app.sel[it.path] == true }
             Icon(
                 if (all) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
@@ -209,9 +209,16 @@ fun GridHeader(app: AppState, row: HeaderRow) {
 }
 
 @Composable
-fun MediaTile(app: AppState, item: Item, flat: List<Item>, index: Int, showReasons: Boolean) {
+fun MediaTile(app: AppState, item: Item, flat: List<Item>, index: Int, showReasons: Boolean, typeBadge: Boolean = false) {
+    androidx.compose.foundation.ContextMenuArea(items = { fileMenu(app, item) { app.openViewer(flat, index) } }) {
+        MediaTileBody(app, item, flat, index, showReasons, typeBadge)
+    }
+}
+
+@Composable
+private fun MediaTileBody(app: AppState, item: Item, flat: List<Item>, index: Int, showReasons: Boolean, typeBadge: Boolean) {
     val selected = app.sel[item.path] == true
-    val selecting = app.sel.isNotEmpty()
+    val selecting = app.hasSel
     val src = remember { MutableInteractionSource() }
     val hovered by src.collectIsHoveredAsState()
     val bmp = rememberThumb(item)
@@ -252,6 +259,9 @@ fun MediaTile(app: AppState, item: Item, flat: List<Item>, index: Int, showReaso
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
+        }
+        if (bmp != null && (typeBadge || item.kind == Kind.VIDEO) && reason == null && !best) {
+            TypeBadge(item, Modifier.align(Alignment.BottomStart).padding(6.dp))
         }
         if (item.kind == Kind.VIDEO && bmp == null) {
             Icon(Icons.Filled.PlayCircle, contentDescription = "Video", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).size(20.dp))

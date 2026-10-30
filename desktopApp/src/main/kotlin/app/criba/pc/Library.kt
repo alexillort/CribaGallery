@@ -268,6 +268,81 @@ class Library(rootDir: File, dataDir: File) {
     }
 }
 
+/** Copia un archivo y devuelve su nuevo Item (con el análisis ya hecho). */
+fun copyFileItem(it: Item, dest: File): Item? = try {
+    dest.mkdirs()
+    val target = uniqueTarget(dest, it.name)
+    Files.copy(it.file.toPath(), target.toPath(), java.nio.file.StandardCopyOption.COPY_ATTRIBUTES)
+    val n = it.movedTo(target.path)
+    runCatching {
+        val t = Media.thumbFile(it)
+        if (t.exists()) Files.copy(t.toPath(), Media.thumbFile(n).toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    }
+    n
+} catch (_: Exception) {
+    null
+}
+
+fun copyTree(src: Path, dst: Path) {
+    Files.walk(src).use { stream ->
+        stream.forEach { p ->
+            val t = dst.resolve(src.relativize(p).toString())
+            if (Files.isDirectory(p)) Files.createDirectories(t)
+            else Files.copy(p, t, java.nio.file.StandardCopyOption.COPY_ATTRIBUTES)
+        }
+    }
+}
+
+fun deleteTree(p: Path) {
+    Files.walk(p).use { stream ->
+        stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+    }
+}
+
+/** Mueve o copia una carpeta completa. Devuelve la nueva ruta o null si falló. */
+fun transferDir(dir: String, dest: File, copy: Boolean): String? {
+    val src = File(dir)
+    if (!src.isDirectory) return null
+    val d = dest.absoluteFile
+    if (d.path == src.path || d.path.startsWith(src.path + File.separator)) return null
+    return try {
+        d.mkdirs()
+        val target = uniqueTarget(d, src.name)
+        if (copy) {
+            copyTree(src.toPath(), target.toPath())
+        } else {
+            try {
+                Files.move(src.toPath(), target.toPath())
+            } catch (_: IOException) {
+                copyTree(src.toPath(), target.toPath())
+                deleteTree(src.toPath())
+            }
+        }
+        target.path
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/** Envía a la Papelera de reciclaje; si no se puede, a una carpeta aparte dentro de la principal. */
+fun toRecycleBin(f: File, root: File): Boolean {
+    val desk = if (Desktop.isDesktopSupported()) Desktop.getDesktop() else null
+    val ok = try {
+        desk?.isSupported(Desktop.Action.MOVE_TO_TRASH) == true && desk.moveToTrash(f)
+    } catch (_: Exception) {
+        false
+    }
+    if (ok) return true
+    return try {
+        val dir = File(root, TRASH_DIR)
+        dir.mkdirs()
+        Files.move(f.toPath(), uniqueTarget(dir, f.name).toPath())
+        true
+    } catch (_: Exception) {
+        false
+    }
+}
+
 fun uniqueTarget(dir: File, name: String): File {
     var f = File(dir, name)
     if (!f.exists()) return f

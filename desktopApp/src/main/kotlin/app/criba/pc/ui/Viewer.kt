@@ -68,7 +68,7 @@ fun Viewer(app: AppState, vs: ViewerState) {
     val thumb = rememberThumb(item)
     val full by produceState<ImageBitmap?>(null, item.path) {
         value = null
-        if (item.kind == Kind.PHOTO && !item.cloudOnly) value = withContext(Dispatchers.IO) { runCatching { Media.loadFull(item, 2800) }.getOrNull() }
+        if (!item.cloudOnly && item.kind != Kind.DOC) value = withContext(Dispatchers.IO) { runCatching { Media.loadFull(item, 2800) }.getOrNull() }
     }
     // Precarga la siguiente miniatura.
     vs.list.getOrNull(i + 1)?.let { rememberThumb(it) }
@@ -91,6 +91,13 @@ fun Viewer(app: AppState, vs: ViewerState) {
                 val img = full ?: thumb
                 if (img != null) {
                     Image(img, contentDescription = item.name, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(horizontal = 72.dp, vertical = 8.dp))
+                    if (item.kind == Kind.VIDEO) {
+                        Button(onClick = { app.openFile(item) }, modifier = Modifier.align(Alignment.Center)) {
+                            Icon(Icons.Filled.Videocam, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.size(6.dp))
+                            Text("Reproducir")
+                        }
+                    }
                 } else {
                     Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Icon(
@@ -140,7 +147,7 @@ fun Viewer(app: AppState, vs: ViewerState) {
                 TextButton(onClick = { app.openFile(item) }) { Text("Abrir con…", color = OnDark) }
                 OutlinedButton(onClick = { app.chooseAndMove(listOf(item)) }) { Text("Mover a…", color = OnDark) }
                 Button(
-                    onClick = { app.confirmTrash = listOf(item) },
+                    onClick = { app.askDelete(listOf(item)) },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB3261E), contentColor = Color.White),
                 ) {
                     Icon(Icons.Filled.Delete, contentDescription = null, modifier = Modifier.size(18.dp))

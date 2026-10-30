@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,14 @@ enum class Scheme(val label: String, val desc: String) {
     DOC_TOPIC("Por tema", "Ordenado / Facturas y recibos, Académico, Contratos…"),
     DOC_YEAR("Año y tipo", "Ordenado / 2024 / PDF"),
 }
+
+/** Lo que una acción afecta: archivos sueltos y carpetas completas. */
+class Targets(val files: List<Item>, val dirs: List<String> = emptyList()) {
+    val count: Int get() = files.size + dirs.size
+    val isEmpty: Boolean get() = count == 0
+}
+
+class Clip(val targets: Targets, val cut: Boolean)
 
 class Review(val title: String, val note: String, val groups: List<List<Item>>, val grouped: Boolean)
 
@@ -109,7 +118,15 @@ class AppState(val dataDir: File) {
     var tileSize by mutableFloatStateOf(170f)
     val sel = mutableStateMapOf<String, Boolean>()
     var viewer by mutableStateOf<ViewerState?>(null)
-    var confirmTrash by mutableStateOf<List<Item>?>(null)
+    val selDirs = mutableStateMapOf<String, Boolean>()
+    var confirmDelete by mutableStateOf<Targets?>(null)
+    var clip by mutableStateOf<Clip?>(null)
+    /** Ruta del archivo o carpeta que se está renombrando. */
+    var renaming by mutableStateOf<String?>(null)
+    var creatingFolder by mutableStateOf(false)
+    /** Sube cada vez que cambian carpetas en disco, para que Explorar se recalcule. */
+    var fsVersion by mutableIntStateOf(0)
+        private set
     var pendingPlan by mutableStateOf<List<Pair<Item, String>>?>(null)
 
     /** Lo que se ve ahora en pantalla (para "Seleccionar todo"). */
@@ -150,7 +167,7 @@ class AppState(val dataDir: File) {
         savePref("root", l.root.path)
         items = emptyList()
         report = Report.EMPTY
-        sel.clear()
+        clearSel()
         viewer = null
         review = null
         exploreDir = null
@@ -251,6 +268,35 @@ class AppState(val dataDir: File) {
 
     fun selectedItems(): List<Item> = items.filter { sel[it.path] == true }
 
+    val hasSel: Boolean get() = sel.isNotEmpty() || selDirs.isNotEmpty()
+    val selCount: Int get() = sel.size + selDirs.size
+
+    fun clearSel() {
+        sel.clear()
+        selDirs.clear()
+    }
+
+    fun selection(): Targets = Targets(selectedItems(), selDirs.keys.toList())
+
+    fun toggleDir(dir: String) {
+        if (selDirs[dir] == true) selDirs.remove(dir) else selDirs[dir] = true
+    }
+
+    /** Si el elemento ya está en una selección de varios, la acción aplica a toda la selección. */
+    fun targetsFor(it: Item): Targets = if (sel[it.path] == true && selCount > 1) selection() else Targets(listOf(it))
+    fun targetsForDir(dir: String): Targets = if (selDirs[dir] == true && selCount > 1) selection() else Targets(emptyList(), listOf(dir))
+
+    fun askDelete(files: List<Item>) {
+        confirmDelete = Targets(files)
+    }
+
+    fun askDelete(t: Targets) {
+        confirmDelete = t
+    }
+
+    /** Una carpeta no se toca si está protegida o tiene adentro algo protegido. */
+    fun dirLocked(dir: String): Boolean = isProtectedDir(dir) || protectedDirs.any { it.startsWith(dir + File.separator) }
+
     fun toggle(it: Item) {
         if (sel[it.path] == true) sel.remove(it.path) else sel[it.path] = true
     }
@@ -266,7 +312,7 @@ class AppState(val dataDir: File) {
     fun switchMode(m: Mode) {
         if (mode == m) return
         mode = m
-        sel.clear()
+        clearSel()
         review = null
         typeFilter = null
         query = ""
@@ -277,7 +323,7 @@ class AppState(val dataDir: File) {
         section = s
         review = null
         typeFilter = null
-        sel.clear()
+        clearSel()
     }
 
     fun setTile(v: Float) {
@@ -290,26 +336,41 @@ class AppState(val dataDir: File) {
     }
 
     fun openReview(r: Review, preselect: Set<String>) {
-        sel.clear()
+        clearSel()
         preselect.forEach { sel[it] = true }
         review = r
     }
 
     fun onKey(e: KeyEvent): Boolean {
         if (e.type != KeyEventType.KeyDown) return false
-        if (confirmTrash != null || pendingPlan != null) return false
+        if (confirmDelete != null || pendingPlan != null || renaming != null || creatingFolder) return false
         val v = viewer
         if (v != null) {
             when (e.key) {
                 Key.DirectionLeft -> { if (v.index > 0) v.index--; return true }
                 Key.DirectionRight -> { if (v.index < v.list.lastIndex) v.index++; return true }
                 Key.Escape -> { viewer = null; return true }
-                Key.Delete -> { v.list.getOrNull(v.index)?.let { confirmTrash = listOf(it) }; return true }
+                Key.Delete -> { v.list.getOrNull(v.index)?.let { askDelete(listOf(it)) }; return true }
             }
             return false
         }
-        if (e.key == Key.Escape && sel.isNotEmpty()) {
-            sel.clear()
+        if (e.key == Key.Escape && hasSel) {
+            clearSel()
+            return true
+        }
+        if (e.isCtrlPressed && section == Section.EXPLORE && review == null) {
+            when (e.key) {
+                Key.C -> if (hasSel) { setClip(selection(), cut = false); return true }
+                Key.X -> if (hasSel) { setClip(selection(), cut = true); return true }
+                Key.V -> if (clip != null) { paste(currentDir()); return true }
+            }
+        }
+        if (e.key == Key.Delete && hasSel && query.isEmpty()) {
+            askDelete(selection())
+            return true
+        }
+        if (e.key == Key.F2 && selCount == 1) {
+            renaming = sel.keys.firstOrNull() ?: selDirs.keys.firstOrNull()
             return true
         }
         return false
@@ -355,7 +416,7 @@ class AppState(val dataDir: File) {
         savePrefSet("proteger", add)
         savePrefSet("desproteger", off)
         recomputeProtected()
-        sel.clear()
+        clearSel()
         scope.launch { rebuild() }
         say(if (on) "Carpeta protegida: nada de adentro se eliminará ni se ordenará" else "Carpeta sin protección")
     }
@@ -376,7 +437,7 @@ class AppState(val dataDir: File) {
     fun navigate(dir: String?) {
         exploreDir = if (dir == root?.path) null else dir
         typeFilter = null
-        sel.clear()
+        clearSel()
         if (section != Section.EXPLORE) {
             review = null
             section = Section.EXPLORE
@@ -397,14 +458,210 @@ class AppState(val dataDir: File) {
         chooseFolder("Elige la carpeta que quieres ordenar", root ?: File(System.getProperty("user.home")))?.let { open(it) }
     }
 
-    fun chooseAndMove(list: List<Item>) {
-        val dest = chooseFolder("Mover ${list.size} a…", root) ?: return
+    fun chooseAndMove(list: List<Item>) = moveTo(Targets(list))
+
+    fun currentDir(): String = exploreDir ?: root?.path.orEmpty()
+
+    fun moveTo(t: Targets) {
+        val dest = chooseFolder("Mover ${t.count} a…", File(currentDir())) ?: return
+        transfer(t, dest, copy = false)
+    }
+
+    fun copyTo(t: Targets) {
+        val dest = chooseFolder("Copiar ${t.count} a…", File(currentDir())) ?: return
+        transfer(t, dest, copy = true)
+    }
+
+    fun setClip(t: Targets, cut: Boolean) {
+        if (t.isEmpty) return
+        clip = Clip(t, cut)
+        val files = t.files.map { it.file } + t.dirs.map { File(it) }
+        runCatching {
+            java.awt.Toolkit.getDefaultToolkit().systemClipboard.setContents(FileListTransfer(files), null)
+        }
+        say(
+            (if (cut) "Cortado" else "Copiado") + ": ${t.count} elemento${if (t.count == 1) "" else "s"}. " +
+                "Ve a otra carpeta y usa Pegar aquí" + if (!cut) " (también puedes pegarlos en el Explorador de Windows)." else "."
+        )
+    }
+
+    fun paste(destDir: String) {
+        val c = clip ?: return
+        transfer(c.targets, File(destDir), copy = !c.cut)
+        if (c.cut) clip = null
+    }
+
+    fun copyPathText(path: String) {
+        runCatching {
+            java.awt.Toolkit.getDefaultToolkit().systemClipboard.setContents(java.awt.datatransfer.StringSelection(path), null)
+            say("Ruta copiada")
+        }
+    }
+
+    /** Mueve o copia archivos y carpetas a un destino, y actualiza la vista sin volver a escanear. */
+    fun transfer(t: Targets, dest: File, copy: Boolean) {
+        val r = root ?: return
+        val blockedFiles = if (copy) emptyList() else t.files.filter { isProtected(it) }
+        val blockedDirs = if (copy) emptyList() else t.dirs.filter { dirLocked(it) }
+        val files = t.files - blockedFiles.toSet()
+        val dirs = t.dirs - blockedDirs.toSet()
+        if (files.isEmpty() && dirs.isEmpty()) {
+            say("Están en carpetas protegidas: no se movieron")
+            return
+        }
+        val verb = if (copy) "Copiando" else "Moviendo"
+        work("$verb ${files.size + dirs.size}…") {
+            val prefix = r.path + File.separator
+            val inside = dest.absoluteFile.path == r.path || dest.absoluteFile.path.startsWith(prefix)
+            var ok = 0
+            val moved = HashMap<String, Item>()
+            val added = ArrayList<Item>()
+            val dirMoves = ArrayList<Pair<String, String>>()
+            withContext(Dispatchers.IO) {
+                for (it in files) {
+                    if (copy) {
+                        copyFileItem(it, dest)?.let { n -> ok++; if (inside) added += n }
+                    } else {
+                        val m = lib?.move(listOf(it), dest).orEmpty()
+                        if (m.isNotEmpty()) { ok++; moved.putAll(m) }
+                    }
+                }
+                val snapshot = items
+                for (d in dirs) {
+                    val nd = transferDir(d, dest, copy) ?: continue
+                    ok++
+                    val old = d + File.separator
+                    for (x in snapshot) {
+                        if (!x.path.startsWith(old)) continue
+                        val n = x.movedTo(nd + File.separator + x.path.substring(old.length))
+                        if (copy) {
+                            runCatching { java.nio.file.Files.copy(Media.thumbFile(x).toPath(), Media.thumbFile(n).toPath()) }
+                            if (inside) added += n
+                        } else {
+                            Media.moveThumb(x, n)
+                            moved[x.path] = n
+                        }
+                    }
+                    if (!copy) dirMoves += d to nd
+                }
+            }
+            for ((d, nd) in dirMoves) {
+                val ed = exploreDir
+                if (ed != null && (ed == d || ed.startsWith(d + File.separator))) exploreDir = nd + ed.removePrefix(d)
+                if (selDirs.remove(d) != null) selDirs[nd] = true
+            }
+            if (added.isNotEmpty()) items = items + added
+            if (moved.isNotEmpty() || added.isNotEmpty() || dirs.isNotEmpty()) applyMoves(moved)
+            fsVersion++
+            val skipped = blockedFiles.size + blockedDirs.size
+            buildString {
+                append(if (copy) "$ok copiados a ${dest.name}" else "$ok movidos a ${dest.name}")
+                if (ok < files.size + dirs.size) append(" · ${files.size + dirs.size - ok} no se pudieron")
+                if (skipped > 0) append(" · $skipped protegidos no se movieron")
+            }
+        }
+    }
+
+    fun delete(t: Targets) {
+        val r = root ?: return
+        val files = t.files.filterNot { isProtected(it) }
+        val dirs = t.dirs.filterNot { dirLocked(it) }
+        if (files.isEmpty() && dirs.isEmpty()) {
+            say("Están en carpetas protegidas")
+            return
+        }
         val l = lib ?: return
-        work("Moviendo ${list.size}…") {
-            val moved = withContext(Dispatchers.IO) { l.move(list, dest) }
+        work("Enviando ${files.size + dirs.size} a la papelera…") {
+            val gone = HashSet<String>()
+            val goneDirs = ArrayList<String>()
+            val snapshot = items
+            var res: Library.TrashResult? = null
+            withContext(Dispatchers.IO) {
+                if (files.isNotEmpty()) res = l.trash(files).also { gone += it.gone }
+                for (d in dirs) {
+                    if (toRecycleBin(File(d), r)) {
+                        goneDirs += d
+                        val pre = d + File.separator
+                        snapshot.forEach { if (it.path.startsWith(pre)) gone += it.path }
+                    }
+                }
+            }
+            goneDirs.forEach { selDirs.remove(it) }
+            val dirsOk = goneDirs.size
+            applyRemoval(gone)
+            fsVersion++
+            val nFiles = res?.gone?.size ?: 0
+            buildString {
+                append("${nFiles + dirsOk} eliminados")
+                append(" · están en la Papelera de reciclaje")
+                res?.let { if (it.toFolder > 0) append(" · ${it.toFolder} quedaron en $TRASH_DIR") }
+                val skipped = t.count - files.size - dirs.size
+                if (skipped > 0) append(" · $skipped protegidos no se tocaron")
+            }
+        }
+    }
+
+    fun rename(path: String, newName: String) {
+        val name = newName.trim()
+        if (name.isEmpty() || name.any { it in "\\/:*?\"<>|" }) {
+            say("Ese nombre no es válido")
+            return
+        }
+        val f = File(path)
+        val target = File(f.parentFile, name)
+        if (target.exists()) {
+            say("Ya existe algo con ese nombre")
+            return
+        }
+        val isDir = f.isDirectory
+        if (isDir && dirLocked(path)) {
+            say("La carpeta está protegida")
+            return
+        }
+        work("Cambiando nombre…") {
+            val ok = withContext(Dispatchers.IO) { runCatching { java.nio.file.Files.move(f.toPath(), target.toPath()) }.isSuccess }
+            if (!ok) return@work "No se pudo cambiar el nombre"
+            val moved = HashMap<String, Item>()
+            if (isDir) {
+                val old = path + File.separator
+                for (x in items) if (x.path.startsWith(old)) {
+                    val n = x.movedTo(target.path + File.separator + x.path.substring(old.length))
+                    Media.moveThumb(x, n)
+                    moved[x.path] = n
+                }
+                if (selDirs.remove(path) != null) selDirs[target.path] = true
+                val ed = exploreDir
+                if (ed != null && (ed == path || ed.startsWith(old))) exploreDir = target.path + ed.removePrefix(path)
+            } else {
+                items.firstOrNull { it.path == path }?.let { x ->
+                    val n = x.movedTo(target.path)
+                    Media.moveThumb(x, n)
+                    moved[x.path] = n
+                    if (sel.remove(path) != null) sel[target.path] = true
+                }
+            }
             applyMoves(moved)
-            val fail = list.size - moved.size
-            "${moved.size} movidos a ${dest.name}" + if (fail > 0) " · $fail no se movieron" else ""
+            fsVersion++
+            "Nombre cambiado a $name"
+        }
+    }
+
+    fun createFolder(inDir: String, name: String) {
+        val n = name.trim()
+        if (n.isEmpty() || n.any { it in "\\/:*?\"<>|" }) {
+            say("Ese nombre no es válido")
+            return
+        }
+        val f = File(inDir, n)
+        if (f.exists()) {
+            say("Ya existe una carpeta con ese nombre")
+            return
+        }
+        if (f.mkdirs()) {
+            fsVersion++
+            say("Carpeta «$n» creada")
+        } else {
+            say("No se pudo crear la carpeta")
         }
     }
 
@@ -568,6 +825,13 @@ class AppState(val dataDir: File) {
             .forEach { out += it }
         return out.distinctBy { it.second.absolutePath.lowercase() }
     }
+}
+
+/** Pone archivos en el portapapeles de Windows para pegarlos también en el Explorador. */
+class FileListTransfer(private val files: List<File>) : java.awt.datatransfer.Transferable {
+    override fun getTransferDataFlavors() = arrayOf(java.awt.datatransfer.DataFlavor.javaFileListFlavor)
+    override fun isDataFlavorSupported(flavor: java.awt.datatransfer.DataFlavor) = flavor == java.awt.datatransfer.DataFlavor.javaFileListFlavor
+    override fun getTransferData(flavor: java.awt.datatransfer.DataFlavor): Any = files
 }
 
 fun chooseFolder(title: String, start: File?): File? {

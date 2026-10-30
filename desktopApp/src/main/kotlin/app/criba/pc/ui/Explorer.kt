@@ -38,6 +38,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.material3.Button
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.OpenInNew
@@ -103,6 +107,14 @@ fun dirView(items: List<Item>, cur: String, deep: Boolean): DirView {
             if (f.cover == null && it.kind == Kind.PHOTO && !it.cloudOnly) f.cover = it
         }
     }
+    if (!deep) {
+        // Carpetas vacías o sin archivos reconocidos también se muestran.
+        File(cur).listFiles()?.forEach { f ->
+            if (f.isDirectory && !f.isHidden && !f.name.startsWith(".") && !f.name.startsWith("$") && f.name !in folders) {
+                folders[f.name] = FolderInfo(f.path, f.name)
+            }
+        }
+    }
     return DirView(if (deep) emptyList() else folders.values.sortedBy { it.name.lowercase() }, files)
 }
 
@@ -130,7 +142,7 @@ class ExFile(val item: Item, val mediaIndex: Int) : ExRow {
 fun ExplorerView(app: AppState) {
     val root = app.root ?: return
     val cur = app.exploreDir ?: root.path
-    val view = remember(app.items, cur, app.exploreDeep) { dirView(app.items, cur, app.exploreDeep) }
+    val view = remember(app.items, cur, app.exploreDeep, app.fsVersion) { dirView(app.items, cur, app.exploreDeep) }
     val q = app.query.trim().lowercase()
     val filter = app.typeFilter
     val chips = remember(view) {
@@ -178,6 +190,7 @@ fun ExplorerView(app: AppState) {
         }
         val state = rememberLazyGridState()
         Box(Modifier.weight(1f).fillMaxWidth()) {
+          androidx.compose.foundation.ContextMenuArea(items = { backgroundMenu(app, cur) }) {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(app.tileSize.dp),
                 state = state,
@@ -197,11 +210,13 @@ fun ExplorerView(app: AppState) {
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.padding(top = 16.dp, bottom = 6.dp, start = 2.dp),
                         )
-                        is ExFolder -> FolderTile(app, row.f)
-                        is ExFile -> if (row.item.isMedia) MediaTile(app, row.item, media, row.mediaIndex, showReasons = false) else FileTile(app, row.item)
+                        is ExFolder -> androidx.compose.foundation.ContextMenuArea(items = { folderMenu(app, row.f.path) }) { FolderTile(app, row.f) }
+                        is ExFile -> if (row.item.isMedia) MediaTile(app, row.item, media, row.mediaIndex, showReasons = false, typeBadge = true)
+                        else androidx.compose.foundation.ContextMenuArea(items = { fileMenu(app, row.item) { app.openFile(row.item) } }) { FileTile(app, row.item) }
                     }
                 }
             }
+          }
             VerticalScrollbar(rememberScrollbarAdapter(state), Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 4.dp))
         }
     }
@@ -231,6 +246,19 @@ private fun ExplorerBar(app: AppState, root: File, cur: String, chips: List<Pair
                     Spacer(Modifier.size(6.dp))
                     Text(if (prot) "Protegida" else "Proteger")
                 }
+            }
+            app.clip?.let { c ->
+                Button(onClick = { app.paste(cur) }) {
+                    Icon(Icons.Filled.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text("Pegar aquí (${c.targets.count})")
+                }
+                TextButton(onClick = { app.clip = null }) { Text("Cancelar") }
+            }
+            TextButton(onClick = { app.creatingFolder = true }) {
+                Icon(Icons.Filled.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.size(6.dp))
+                Text("Nueva carpeta")
             }
             TextButton(onClick = { app.openFolderInExplorer(cur) }) {
                 Icon(Icons.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -296,8 +324,17 @@ private fun FolderTile(app: AppState, f: FolderInfo) {
     val src = remember { MutableInteractionSource() }
     val hovered by src.collectIsHoveredAsState()
     val cover = f.cover
-    Column(Modifier.padding(4.dp).clip(RoundedCornerShape(10.dp)).hoverable(src).clickable { app.navigate(f.path) }) {
-        Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainer)) {
+    val selected = app.selDirs[f.path] == true
+    Column(
+        Modifier.padding(4.dp).clip(RoundedCornerShape(10.dp))
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+            .hoverable(src)
+            .clickable { if (app.hasSel) app.toggleDir(f.path) else app.navigate(f.path) }
+    ) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
+                .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp)) else Modifier)
+        ) {
             if (cover != null) {
                 val bmp = rememberThumb(cover)
                 if (bmp != null) Image(bmp, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(), alpha = 0.85f)
@@ -308,6 +345,21 @@ private fun FolderTile(app: AppState, f: FolderInfo) {
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = if (cover == null) Modifier.align(Alignment.Center).size(56.dp) else Modifier.align(Alignment.BottomStart).padding(6.dp).size(26.dp),
             )
+            if (hovered || app.hasSel) {
+                Box(
+                    Modifier.align(Alignment.TopStart).padding(6.dp).size(26.dp).clip(CircleShape)
+                        .background(if (selected) Color.White else Color(0x55000000))
+                        .clickable { app.toggleDir(f.path) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        if (selected) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
+                        contentDescription = if (selected) "Quitar selección" else "Seleccionar carpeta",
+                        tint = if (selected) MaterialTheme.colorScheme.primary else Color.White,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
             if (prot || hovered) {
                 Box(
                     Modifier.align(Alignment.TopEnd).padding(6.dp).size(30.dp).clip(CircleShape)
@@ -349,9 +401,16 @@ private fun FileTile(app: AppState, item: Item) {
             .combinedClickable(onClick = { app.toggle(item) }, onDoubleClick = { app.openFile(item) })
             .padding(10.dp),
     ) {
-        Box(Modifier.fillMaxWidth().aspectRatio(1.5f), contentAlignment = Alignment.Center) {
-            Box(Modifier.size(54.dp).clip(RoundedCornerShape(10.dp)).background(Color(t.color)), contentAlignment = Alignment.Center) {
-                Text(item.ext.uppercase().take(4).ifEmpty { "—" }, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        val preview = rememberThumb(item)
+        Box(Modifier.fillMaxWidth().aspectRatio(1.2f).clip(RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
+            if (preview != null) {
+                Box(Modifier.fillMaxSize().background(Color.White))
+                Image(preview, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                TypeBadge(item, Modifier.align(Alignment.BottomStart).padding(4.dp))
+            } else {
+                Box(Modifier.size(54.dp).clip(RoundedCornerShape(10.dp)).background(Color(t.color)), contentAlignment = Alignment.Center) {
+                    Text(item.ext.uppercase().take(4).ifEmpty { "—" }, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
             }
             if (selected) Icon(Icons.Filled.CheckCircle, contentDescription = "Seleccionado", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.align(Alignment.TopStart).size(20.dp))
             if (item.cloudOnly) Icon(Icons.Outlined.Cloud, contentDescription = "Solo en la nube", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.TopEnd).size(16.dp))

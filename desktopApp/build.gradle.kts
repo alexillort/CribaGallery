@@ -26,6 +26,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.8.1")
     // Lee fechas, cámara y orientación (EXIF) de fotos y videos, incluidos HEIC y MP4.
     implementation("com.drewnoakes:metadata-extractor:2.19.0")
+    // Vista previa de PDF (primera página).
+    implementation("org.apache.pdfbox:pdfbox:3.0.3")
+    // Miniaturas de Windows para videos, HEIC y Office.
+    implementation("net.java.dev.jna:jna:5.14.0")
+    implementation("net.java.dev.jna:jna-platform:5.14.0")
 }
 
 compose.desktop {
