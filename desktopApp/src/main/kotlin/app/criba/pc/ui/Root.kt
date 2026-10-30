@@ -163,8 +163,8 @@ private fun Sidebar(app: AppState) {
             }
         }
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            SegmentedButton(selected = app.mode == Mode.PHOTOS, onClick = { app.setMode(Mode.PHOTOS) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Fotos") }
-            SegmentedButton(selected = app.mode == Mode.DOCS, onClick = { app.setMode(Mode.DOCS) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Documentos") }
+            SegmentedButton(selected = app.mode == Mode.PHOTOS, onClick = { app.switchMode(Mode.PHOTOS) }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Fotos") }
+            SegmentedButton(selected = app.mode == Mode.DOCS, onClick = { app.switchMode(Mode.DOCS) }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Documentos") }
         }
         Spacer(Modifier.size(4.dp))
         val suggestedCount = remember(r, app.mode) {

@@ -242,7 +242,7 @@ class AppState(val dataDir: File) {
         visibleItems.forEach { sel[it.path] = true }
     }
 
-    fun setMode(m: Mode) {
+    fun switchMode(m: Mode) {
         if (mode == m) return
         mode = m
         sel.clear()
