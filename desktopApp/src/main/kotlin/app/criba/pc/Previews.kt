@@ -50,7 +50,7 @@ object ShellThumb {
         if (!IS_WINDOWS) null else runCatching { Native.load("shell32", Shell32Ex::class.java, W32APIOptions.UNICODE_OPTIONS) }.getOrNull()
     }
 
-    private val IID_IShellItemImageFactory = Guid.GUID.fromString("{bcc18b79-ba16-442f-80c4-8a59c30c463b}")
+    private val IID_IShellItemImageFactory = Guid.IID("{bcc18b79-ba16-442f-80c4-8a59c30c463b}")
 
     private val comReady = ThreadLocal.withInitial {
         runCatching { Ole32.INSTANCE.CoInitializeEx(null, Ole32.COINIT_MULTITHREADED) }
