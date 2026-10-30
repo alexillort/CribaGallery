@@ -437,8 +437,8 @@ class AppState(val dataDir: File) {
         messages.tryEmit(msg)
     }
 
-    fun openFile(it: Item) {
-        runCatching { Desktop.getDesktop().open(it.file) }.onFailure { say("No se pudo abrir ${it.name}") }
+    fun openFile(item: Item) {
+        runCatching { Desktop.getDesktop().open(item.file) }.onFailure { say("No se pudo abrir ${item.name}") }
     }
 
     fun reveal(it: Item) {
