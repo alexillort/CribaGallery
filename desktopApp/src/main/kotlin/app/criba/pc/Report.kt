@@ -30,6 +30,8 @@ class Report(
     /** El mejor de cada grupo (se conserva). */
     val best: Set<String>,
     val cloudOnly: Int,
+    /** Archivos dentro de carpetas protegidas. */
+    val protectedPaths: Set<String> = emptySet(),
 ) {
     val mediaBytes: Long = media.sumOf { it.size }
     val docBytes: Long = docs.sumOf { it.size }
@@ -41,10 +43,17 @@ class Report(
             emptyMap(), emptySet(), 0,
         )
 
-        fun build(all: List<Item>): Report {
+        fun build(all: List<Item>, protectedDirs: Set<String> = emptySet()): Report {
+            val prefixes = protectedDirs.map { it + java.io.File.separator }
+            fun prot(it: Item) = prefixes.any { p -> it.path.startsWith(p) }
             val media = all.filter { it.isMedia }.sortedByDescending { it.taken }
             val docs = all.filter { !it.isMedia }.sortedByDescending { it.modified }
             val reasons = HashMap<String, String>()
+            val protectedPaths = HashSet<String>()
+            if (prefixes.isNotEmpty()) all.forEach { if (prot(it)) protectedPaths += it.path }
+            fun mark(it: Item, why: String) {
+                if (it.path !in protectedPaths) reasons.putIfAbsent(it.path, why)
+            }
             val best = HashSet<String>()
 
             val keepOrder = compareBy<Item>({ COPY_RX.containsMatchIn(it.name) }, { it.name.length }, { it.modified })
@@ -55,11 +64,11 @@ class Report(
                 .sortedByDescending { it[0].size * (it.size - 1) }
             for (g in exact) {
                 best += g[0].path
-                g.drop(1).forEach { reasons.putIfAbsent(it.path, "Duplicado") }
+                g.drop(1).forEach { mark(it, "Duplicado") }
             }
 
             // Fotos casi iguales: ráfagas tomadas con minutos de diferencia y huella visual parecida.
-            val cand = media.filter { it.kind == Kind.PHOTO && it.analyzed && !it.failed && it.dhash != 0L && it.path !in reasons }
+            val cand = media.filter { it.kind == Kind.PHOTO && it.analyzed && !it.failed && it.dhash != 0L && it.path !in reasons && it.path !in protectedPaths }
                 .sortedBy { it.taken }
             val parent = IntArray(cand.size) { it }
             fun find(x: Int): Int {
@@ -85,33 +94,34 @@ class Report(
                 .sortedByDescending { g -> g.maxOf { it.taken } }
             for (g in similar) {
                 best += g[0].path
-                g.drop(1).forEach { reasons.putIfAbsent(it.path, "Casi igual") }
+                g.drop(1).forEach { mark(it, "Casi igual") }
             }
 
             val sharps = media.filter { it.sharp >= 0 }.map { it.sharp }.sorted()
             val median = if (sharps.isEmpty()) 100.0 else sharps[sharps.size / 2]
             val blurLimit = maxOf(20.0, median * 0.15)
-            val blurry = media.filter { it.sharp >= 0 && it.sharp < blurLimit && !isScreenshot(it) }
-            blurry.forEach { reasons.putIfAbsent(it.path, "Borrosa") }
-            val darkOrBright = media.filter { it.lum >= 0 && (it.lum < 28 || it.lum > 242) && !isScreenshot(it) }
-            darkOrBright.forEach { reasons.putIfAbsent(it.path, if (it.lum < 28) "Muy oscura" else "Quemada") }
+            val free = { it: Item -> it.path !in protectedPaths }
+            val blurry = media.filter { it.sharp >= 0 && it.sharp < blurLimit && !isScreenshot(it) && free(it) }
+            blurry.forEach { mark(it, "Borrosa") }
+            val darkOrBright = media.filter { it.lum >= 0 && (it.lum < 28 || it.lum > 242) && !isScreenshot(it) && free(it) }
+            darkOrBright.forEach { mark(it, if (it.lum < 28) "Muy oscura" else "Quemada") }
 
-            val photoDups = exact.filter { it[0].isMedia }
-            val docDups = exact.filter { !it[0].isMedia }
+            val photoDups = exact.filter { g -> g[0].isMedia && g.drop(1).any { free(it) } }
+            val docDups = exact.filter { g -> !g[0].isMedia && g.drop(1).any { free(it) } }
 
-            val versions = docs.filter { it.path !in reasons }
+            val versions = docs.filter { it.path !in reasons && free(it) }
                 .groupBy { versionBase(it.name) }.values
                 .filter { it.size > 1 }
                 .map { g -> g.sortedByDescending { it.modified } }
                 .sortedByDescending { it[0].modified }
             for (g in versions) {
                 best += g[0].path
-                g.drop(1).forEach { reasons.putIfAbsent(it.path, "Versión anterior") }
+                g.drop(1).forEach { mark(it, "Versión anterior") }
             }
-            val temp = docs.filter { TEMP_RX.containsMatchIn(it.name) }
-            temp.forEach { reasons.putIfAbsent(it.path, "Temporal") }
-            val installers = docs.filter { docType(it.ext) == DOC_TYPES.last() }
-            installers.forEach { reasons.putIfAbsent(it.path, "Instalador") }
+            val temp = docs.filter { TEMP_RX.containsMatchIn(it.name) && free(it) }
+            temp.forEach { mark(it, "Temporal") }
+            val installers = docs.filter { docType(it.ext) == DOC_TYPES.last() && free(it) }
+            installers.forEach { mark(it, "Instalador") }
 
             val threeYears = System.currentTimeMillis() - 3L * 365 * 86_400_000L
 
@@ -123,18 +133,19 @@ class Report(
                 similar = similar,
                 blurry = blurry,
                 darkOrBright = darkOrBright,
-                screenshots = media.filter { isScreenshot(it) },
-                whatsapp = media.filter { isWhatsApp(it) },
-                bigVideos = media.filter { it.kind == Kind.VIDEO && it.size > 300L * 1024 * 1024 }.sortedByDescending { it.size },
+                screenshots = media.filter { isScreenshot(it) && free(it) },
+                whatsapp = media.filter { isWhatsApp(it) && free(it) },
+                bigVideos = media.filter { it.kind == Kind.VIDEO && it.size > 300L * 1024 * 1024 && free(it) }.sortedByDescending { it.size },
                 docDups = docDups,
                 versions = versions,
                 temp = temp,
                 installers = installers,
-                bigDocs = docs.filter { it.size > 200L * 1024 * 1024 }.sortedByDescending { it.size },
-                oldDocs = docs.filter { it.modified < threeYears }.sortedBy { it.modified },
+                bigDocs = docs.filter { it.size > 200L * 1024 * 1024 && free(it) }.sortedByDescending { it.size },
+                oldDocs = docs.filter { it.modified < threeYears && free(it) }.sortedBy { it.modified },
                 reasons = reasons,
                 best = best,
                 cloudOnly = all.count { it.cloudOnly },
+                protectedPaths = protectedPaths,
             )
         }
 

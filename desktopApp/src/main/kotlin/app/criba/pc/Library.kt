@@ -28,6 +28,13 @@ private val SKIP_DIRS = setOf(
     ".venv", "venv", "__pycache__", ".gradle", ".idea", "library", "temp",
 )
 
+private val PROJECT_DIR_MARKERS = setOf(".git", ".svn", ".hg", "projectsettings", ".vs", ".idea")
+private val PROJECT_FILE_MARKERS = setOf(
+    "package.json", "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+    "cargo.toml", "pyproject.toml", "setup.py", "cmakelists.txt", "makefile", "go.mod", "gemfile", "composer.json",
+)
+private val PROJECT_EXT_MARKERS = setOf("sln", "csproj", "vcxproj", "uproject", "rproj", "xcodeproj", "unity")
+
 val IS_WINDOWS = System.getProperty("os.name").lowercase().contains("win")
 
 /** Una carpeta abierta en Criba: escaneo, índice en disco y operaciones sobre archivos. */
@@ -36,6 +43,10 @@ class Library(rootDir: File, dataDir: File) {
     private val key = sha1(root.path.lowercase())
     private val indexFile = File(dataDir, "indices/$key.bin")
     val undoFile = File(dataDir, "deshacer/$key.txt")
+    val prefKey: String get() = key
+
+    /** Carpetas que parecen proyectos (código, Unity, Unreal…): se protegen solas. */
+    val projectDirs: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
 
     @Suppress("UNCHECKED_CAST")
     fun loadIndex(): Map<String, Item> = try {
@@ -66,6 +77,7 @@ class Library(rootDir: File, dataDir: File) {
             override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
                 if (dir != rootPath) {
                     val n = dir.fileName?.toString()?.lowercase() ?: return FileVisitResult.CONTINUE
+                    if (n in PROJECT_DIR_MARKERS) markProject(dir.parent)
                     if (n in SKIP_DIRS || n.startsWith(".")) return FileVisitResult.SKIP_SUBTREE
                 }
                 return FileVisitResult.CONTINUE
@@ -75,6 +87,7 @@ class Library(rootDir: File, dataDir: File) {
                 if (!attrs.isRegularFile) return FileVisitResult.CONTINUE
                 val name = file.fileName.toString()
                 val ext = name.substringAfterLast('.', "").lowercase()
+                if (name.lowercase() in PROJECT_FILE_MARKERS || ext in PROJECT_EXT_MARKERS) markProject(file.parent)
                 val kind = when (ext) {
                     in PHOTO_EXT -> Kind.PHOTO
                     in VIDEO_EXT -> Kind.VIDEO
@@ -94,6 +107,11 @@ class Library(rootDir: File, dataDir: File) {
             override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult = FileVisitResult.CONTINUE
         })
         return out
+    }
+
+    private fun markProject(dir: Path?) {
+        if (dir == null || dir == root.toPath()) return
+        projectDirs += dir.toString()
     }
 
     /** OneDrive "Archivos a petición": los que están solo en la nube tienen estas marcas. */

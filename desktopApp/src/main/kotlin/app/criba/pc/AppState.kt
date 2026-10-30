@@ -32,8 +32,10 @@ import javax.swing.JFileChooser
 enum class Mode { PHOTOS, DOCS }
 
 enum class Section(val label: String) {
-    LIBRARY("Biblioteca"), FOLDERS("Carpetas"), TYPES("Por tipo"), TOPICS("Por tema"), CLEAN("Limpiar"), ORGANIZE("Ordenar")
+    LIBRARY("Biblioteca"), EXPLORE("Explorar"), TYPES("Por tipo"), TOPICS("Por tema"), CLEAN("Limpiar"), ORGANIZE("Ordenar")
 }
+
+enum class SortBy(val label: String) { NAME("Nombre"), DATE("Fecha"), SIZE("Tamaño") }
 
 enum class Scheme(val label: String, val desc: String) {
     YEAR_MONTH("Año y mes", "Ordenado / 2025 / 2025-06 junio"),
@@ -90,7 +92,18 @@ class AppState(val dataDir: File) {
 
     var mode by mutableStateOf(Mode.PHOTOS)
     var section by mutableStateOf(Section.LIBRARY)
-    var folderFilter by mutableStateOf<String?>(null)
+    /** Carpeta abierta en Explorar (null = la principal). */
+    var exploreDir by mutableStateOf<String?>(null)
+    var exploreDeep by mutableStateOf(false)
+    var stackByType by mutableStateOf(false)
+    var typeFilter by mutableStateOf<String?>(null)
+    var sortBy by mutableStateOf(SortBy.NAME)
+    var showProtected by mutableStateOf(false)
+
+    /** Carpetas protegidas: nada de adentro se sugiere, se elimina ni se ordena. */
+    var protectedDirs by mutableStateOf<Set<String>>(emptySet())
+        private set
+    private var autoDirs: Set<String> = emptySet()
     var review by mutableStateOf<Review?>(null)
     var query by mutableStateOf("")
     var tileSize by mutableFloatStateOf(170f)
@@ -140,10 +153,13 @@ class AppState(val dataDir: File) {
         sel.clear()
         viewer = null
         review = null
-        folderFilter = null
+        exploreDir = null
+        typeFilter = null
         query = ""
         section = if (mode == Mode.PHOTOS) Section.LIBRARY else Section.TYPES
         canUndo = l.undoFile.exists()
+        autoDirs = emptySet()
+        recomputeProtected()
         job = scope.launch { refresh(l) }
     }
 
@@ -179,7 +195,10 @@ class AppState(val dataDir: File) {
         items = list
         scanCount = list.size
         scanning = false
-        report = withContext(Dispatchers.Default) { Report.build(list) }
+        autoDirs = HashSet(l.projectDirs)
+        recomputeProtected()
+        val prot = protectedDirs
+        report = withContext(Dispatchers.Default) { Report.build(list, prot) }
 
         val todo = list.filter { it.isMedia && !it.analyzed }
         analyzeTotal = todo.size
@@ -194,7 +213,8 @@ class AppState(val dataDir: File) {
                 if (done.get() - last >= 500) {
                     last = done.get()
                     val snap = items
-                    report = withContext(Dispatchers.Default) { Report.build(snap) }
+                    val prot = protectedDirs
+                    report = withContext(Dispatchers.Default) { Report.build(snap, prot) }
                 }
             }
         }
@@ -222,7 +242,8 @@ class AppState(val dataDir: File) {
         }
         analyzedCount = done.get()
         val snap = items
-        report = withContext(Dispatchers.Default) { Report.build(snap) }
+        val prot = protectedDirs
+        report = withContext(Dispatchers.Default) { Report.build(snap, prot) }
         withContext(Dispatchers.IO) { l.saveIndex(snap) }
     }
 
@@ -247,7 +268,7 @@ class AppState(val dataDir: File) {
         mode = m
         sel.clear()
         review = null
-        folderFilter = null
+        typeFilter = null
         query = ""
         section = if (m == Mode.PHOTOS) Section.LIBRARY else Section.TYPES
     }
@@ -255,7 +276,7 @@ class AppState(val dataDir: File) {
     fun go(s: Section) {
         section = s
         review = null
-        folderFilter = null
+        typeFilter = null
         sel.clear()
     }
 
@@ -294,6 +315,82 @@ class AppState(val dataDir: File) {
         return false
     }
 
+    // ---------- carpetas protegidas ----------
+
+    private fun prefSet(name: String): Set<String> {
+        val l = lib ?: return emptySet()
+        return prefs.getProperty("$name.${l.prefKey}")?.split('|')?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+    }
+
+    private fun savePrefSet(name: String, v: Set<String>) {
+        val l = lib ?: return
+        savePref("$name.${l.prefKey}", v.joinToString("|"))
+    }
+
+    private fun recomputeProtected() {
+        protectedDirs = (autoDirs + prefSet("proteger")) - prefSet("desproteger")
+    }
+
+    fun isAutoProtected(dir: String) = dir in autoDirs
+
+    fun isProtectedDir(dir: String): Boolean = protectedDirs.any { dir == it || dir.startsWith(it + File.separator) }
+
+    fun isProtected(it: Item): Boolean = protectedDirs.any { p -> it.path.startsWith(p + File.separator) }
+
+    fun setProtected(dir: String, on: Boolean) {
+        var add = prefSet("proteger")
+        var off = prefSet("desproteger")
+        if (on) {
+            add = add + dir
+            off = off - dir
+        } else {
+            add = add - dir
+            if (dir in autoDirs) off = off + dir
+            // Quitar la protección de una carpeta también la quita de las que la contienen.
+            protectedDirs.filter { dir.startsWith(it + File.separator) }.forEach { parent ->
+                add = add - parent
+                if (parent in autoDirs) off = off + parent
+            }
+        }
+        savePrefSet("proteger", add)
+        savePrefSet("desproteger", off)
+        recomputeProtected()
+        sel.clear()
+        scope.launch { rebuild() }
+        say(if (on) "Carpeta protegida: nada de adentro se eliminará ni se ordenará" else "Carpeta sin protección")
+    }
+
+    fun chooseAndProtect() {
+        val r = root ?: return
+        val f = chooseFolder("Elige la carpeta que quieres proteger", r) ?: return
+        val p = f.absoluteFile.path
+        if (!p.startsWith(r.path + File.separator)) {
+            say("Elige una carpeta dentro de ${r.name}")
+            return
+        }
+        setProtected(p, true)
+    }
+
+    // ---------- explorar ----------
+
+    fun navigate(dir: String?) {
+        exploreDir = if (dir == root?.path) null else dir
+        typeFilter = null
+        sel.clear()
+        if (section != Section.EXPLORE) {
+            review = null
+            section = Section.EXPLORE
+        }
+    }
+
+    fun openFolderInExplorer(dir: String) {
+        try {
+            if (IS_WINDOWS) ProcessBuilder("explorer.exe", dir).start() else Desktop.getDesktop().open(File(dir))
+        } catch (_: Exception) {
+            say("No se pudo abrir la carpeta")
+        }
+    }
+
     // ---------- operaciones ----------
 
     fun chooseRoot() {
@@ -311,8 +408,13 @@ class AppState(val dataDir: File) {
         }
     }
 
-    fun trash(list: List<Item>) {
+    fun trash(all: List<Item>) {
         val l = lib ?: return
+        val list = all.filterNot { isProtected(it) }
+        if (list.isEmpty()) {
+            say("Esos archivos están en carpetas protegidas")
+            return
+        }
         work("Enviando ${list.size} a la papelera…") {
             val r = withContext(Dispatchers.IO) { l.trash(list) }
             applyRemoval(r.gone)
@@ -331,7 +433,7 @@ class AppState(val dataDir: File) {
         val base = File(r, ORDER_DIR).path + File.separator
         val src = if (s == Scheme.DOC_TYPE || s == Scheme.DOC_TOPIC || s == Scheme.DOC_YEAR) report.docs else report.media
         return src.asSequence()
-            .filter { !it.path.startsWith(base) }
+            .filter { !it.path.startsWith(base) && !isProtected(it) }
             .filter { !looseOnly || it.parent == r.path }
             .filter { !skipMarked || it.path !in report.reasons }
             .map { it to destFor(it, s) }
@@ -415,7 +517,8 @@ class AppState(val dataDir: File) {
 
     private suspend fun rebuild() {
         val snap = items
-        report = withContext(Dispatchers.Default) { Report.build(snap) }
+        val prot = protectedDirs
+        report = withContext(Dispatchers.Default) { Report.build(snap, prot) }
         val l = lib
         if (l != null && !analyzing) scope.launch(Dispatchers.IO) { l.saveIndex(snap) }
     }

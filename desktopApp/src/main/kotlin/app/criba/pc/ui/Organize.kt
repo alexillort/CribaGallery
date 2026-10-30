@@ -84,6 +84,7 @@ fun OrganizeView(app: AppState) {
             Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(12.dp)) {
                 Text(
                     "Se crea la carpeta «$ORDER_DIR» dentro de «$rootName». Nada se borra y puedes deshacerlo." +
+                        (if (app.protectedDirs.isNotEmpty()) " Las ${app.protectedDirs.size} carpetas protegidas no se tocan." else "") +
                         if (app.isOneDrive) " Como esta carpeta está en OneDrive, los cambios se sincronizan solos." else "",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(14.dp),

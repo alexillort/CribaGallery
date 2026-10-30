@@ -102,19 +102,19 @@ sealed interface GRow {
     val key: String
 }
 
-class HeaderRow(val title: String, val sub: String?, val group: List<Item>?, override val key: String, val big: Boolean) : GRow
+class HeaderRow(val title: String, val sub: String?, val group: List<Item>?, override val key: String, val big: Boolean, val year: Int = 0) : GRow
 class TileRow(val item: Item, val index: Int, override val key: String) : GRow
 
-fun libraryRows(moments: List<Moment>, query: String): Pair<List<GRow>, List<Item>> {
+fun libraryRows(moments: List<Moment>, query: String, keep: (Item) -> Boolean = { true }): Pair<List<GRow>, List<Item>> {
     val rows = ArrayList<GRow>()
     val flat = ArrayList<Item>()
     var lastMonth = ""
     for (m in moments) {
-        val list = if (query.isEmpty()) m.items else m.items.filter { matches(it, query) }
+        val list = m.items.filter { keep(it) && (query.isEmpty() || matches(it, query)) }
         if (list.isEmpty()) continue
         val month = monthLabel(m.start)
         if (month != lastMonth) {
-            rows += HeaderRow(month, null, null, "m:$month:${rows.size}", big = true)
+            rows += HeaderRow(month, null, null, "m:$month:${rows.size}", big = true, year = localDate(m.start).year)
             lastMonth = month
         }
         val range = if (localDate(m.start) == localDate(m.end) && m.end - m.start > 60_000) "${timeOf(m.start)}–${timeOf(m.end)}" else timeOf(m.start)
@@ -145,8 +145,13 @@ fun matches(it: Item, q: String): Boolean =
     it.name.lowercase().contains(q) || it.folderName.lowercase().contains(q) || it.camera.lowercase().contains(q)
 
 @Composable
-fun MediaGrid(app: AppState, rows: List<GRow>, flat: List<Item>, showReasons: Boolean = false) {
-    val state = rememberLazyGridState()
+fun MediaGrid(
+    app: AppState,
+    rows: List<GRow>,
+    flat: List<Item>,
+    showReasons: Boolean = false,
+    state: androidx.compose.foundation.lazy.grid.LazyGridState = rememberLazyGridState(),
+) {
     Box(Modifier.fillMaxSize()) {
         LazyVerticalGrid(
             columns = GridCells.Adaptive(app.tileSize.dp),
@@ -290,54 +295,6 @@ fun MediaTile(app: AppState, item: Item, flat: List<Item>, index: Int, showReaso
 }
 
 private fun Modifier.matchParentSizeCompat(): Modifier = this.fillMaxSize()
-
-@Composable
-fun FoldersView(app: AppState) {
-    val r = app.report
-    val q = app.query.trim().lowercase()
-    val albums = remember(r, q) {
-        r.media.groupBy { it.parent }.toList()
-            .filter { (dir, list) -> q.isEmpty() || dir.lowercase().contains(q) || list.any { matches(it, q) } }
-            .sortedByDescending { (_, list) -> list.first().taken }
-    }
-    if (albums.isEmpty()) {
-        Empty("No hay carpetas con fotos o videos aquí.")
-        return
-    }
-    val state = rememberLazyGridState()
-    val rootPath = app.root?.path.orEmpty()
-    Box(Modifier.fillMaxSize()) {
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(210.dp),
-            state = state,
-            contentPadding = PaddingValues(20.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            items(albums, key = { it.first }) { (dir, list) ->
-                val cover = list.firstOrNull { it.kind == Kind.PHOTO && !it.cloudOnly } ?: list.first()
-                val bmp = rememberThumb(cover)
-                Column(Modifier.clip(RoundedCornerShape(14.dp)).clickable { app.folderFilter = dir }) {
-                    Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
-                        if (bmp != null) Image(bmp, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                    }
-                    val name = if (dir == rootPath) "${java.io.File(dir).name} (principal)" else java.io.File(dir).name
-                    Text(name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp, start = 2.dp))
-                    Text(
-                        "${list.size} · ${dir.removePrefix(rootPath).trimStart('\\', '/').ifEmpty { "carpeta principal" }}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 2.dp),
-                    )
-                }
-            }
-        }
-        VerticalScrollbar(rememberScrollbarAdapter(state), Modifier.align(Alignment.CenterEnd).fillMaxHeight())
-    }
-}
 
 @Composable
 fun Empty(text: String) {

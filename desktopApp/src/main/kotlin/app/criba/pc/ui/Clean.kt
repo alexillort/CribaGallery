@@ -62,20 +62,20 @@ class CleanCat(
     val bytes: Long = if (preselect.isNotEmpty()) all.filter { it.path in preselect }.sumOf { it.size } else all.sumOf { it.size }
 }
 
-private fun extras(groups: List<List<Item>>) = groups.flatMap { it.drop(1) }.map { it.path }.toSet()
+private fun extras(r: Report, groups: List<List<Item>>) = groups.flatMap { it.drop(1) }.map { it.path }.filter { it in r.reasons }.toSet()
 private fun allOf(list: List<Item>) = list.map { it.path }.toSet()
 
 fun cleanCats(r: Report, mode: Mode): List<CleanCat> = if (mode == Mode.PHOTOS) listOf(
-    CleanCat("Duplicados exactos", "El mismo archivo guardado más de una vez. Se conserva una copia de cada uno.", r.photoDups, true, extras(r.photoDups)),
-    CleanCat("Fotos casi iguales", "Ráfagas y tomas repetidas. Se conserva la más nítida de cada grupo.", r.similar, true, extras(r.similar)),
+    CleanCat("Duplicados exactos", "El mismo archivo guardado más de una vez. Se conserva una copia de cada uno.", r.photoDups, true, extras(r, r.photoDups)),
+    CleanCat("Fotos casi iguales", "Ráfagas y tomas repetidas. Se conserva la más nítida de cada grupo.", r.similar, true, extras(r, r.similar)),
     CleanCat("Borrosas", "Fotos movidas o desenfocadas.", listOf(r.blurry), false, allOf(r.blurry)),
     CleanCat("Muy oscuras o quemadas", "Fotos casi negras o casi blancas, muchas veces tomadas sin querer.", listOf(r.darkOrBright), false, allOf(r.darkOrBright)),
     CleanCat("Capturas de pantalla", "Revisa las que ya no necesitas.", listOf(r.screenshots), false, emptySet()),
     CleanCat("WhatsApp", "Fotos y videos recibidos por WhatsApp.", listOf(r.whatsapp), false, emptySet()),
     CleanCat("Videos pesados", "Videos de más de 300 MB, del más pesado al más ligero.", listOf(r.bigVideos), false, emptySet()),
 ) else listOf(
-    CleanCat("Duplicados exactos", "El mismo archivo guardado más de una vez. Se conserva una copia.", r.docDups, true, extras(r.docDups)),
-    CleanCat("Versiones anteriores", "final, final2, v1, v2, (1)… Se conserva la más reciente de cada documento.", r.versions, true, extras(r.versions)),
+    CleanCat("Duplicados exactos", "El mismo archivo guardado más de una vez. Se conserva una copia.", r.docDups, true, extras(r, r.docDups)),
+    CleanCat("Versiones anteriores", "final, final2, v1, v2, (1)… Se conserva la más reciente de cada documento.", r.versions, true, extras(r, r.versions)),
     CleanCat("Temporales", "Archivos que dejan Office y los navegadores: ~\$, .tmp, descargas incompletas.", listOf(r.temp), false, allOf(r.temp)),
     CleanCat("Instaladores", "Programas que ya instalaste (.exe, .msi, .iso…).", listOf(r.installers), false, allOf(r.installers)),
     CleanCat("Archivos pesados", "De más de 200 MB.", listOf(r.bigDocs), false, emptySet()),

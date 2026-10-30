@@ -53,20 +53,28 @@ import app.criba.pc.topicOf
 fun DocsGrouped(app: AppState, byTopic: Boolean) {
     val r = app.report
     val q = app.query.trim().lowercase()
-    val (rows, flat) = remember(r, q, byTopic) {
-        val groups = r.docs.filter { q.isEmpty() || matches(it, q) }
+    val filter = app.typeFilter
+    val groups = remember(r, q, byTopic) {
+        r.docs.filter { q.isEmpty() || matches(it, q) }
             .groupBy { if (byTopic) topicOf(it) else docType(it.ext).label }
             .toList()
             .sortedWith(compareBy<Pair<String, List<Item>>>({ it.first == NO_TOPIC || it.first == "Otros" }, { -it.second.size }))
-            .map { (k, v) -> "$k · ${fmtBytes(v.sumOf { it.size })}" to v }
-        groupRows(groups)
+    }
+    val (rows, flat) = remember(groups, filter) {
+        groupRows(
+            groups.filter { filter == null || it.first == filter }
+                .map { (k, v) -> "$k · ${v.size} · ${fmtBytes(v.sumOf { it.size })}" to v }
+        )
     }
     SideEffect { app.visibleItems = flat }
-    if (flat.isEmpty()) {
-        Empty(if (q.isEmpty()) "No hay documentos en esta carpeta." else "Nada coincide con «$q».")
-        return
+    Column(Modifier.fillMaxSize()) {
+        ChipBar(groups.map { it.first to it.second.size }, filter) { app.typeFilter = it }
+        if (flat.isEmpty()) {
+            Empty(if (q.isEmpty()) "No hay documentos en esta carpeta." else "Nada coincide con «$q».")
+        } else {
+            Box(Modifier.weight(1f)) { DocGrid(app, rows) }
+        }
     }
-    DocGrid(app, rows)
 }
 
 @Composable

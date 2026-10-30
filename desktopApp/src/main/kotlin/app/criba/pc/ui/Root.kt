@@ -1,6 +1,9 @@
 package app.criba.pc.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,6 +30,7 @@ import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -60,6 +64,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import app.criba.pc.Item
+import app.criba.pc.Kind
+import app.criba.pc.isScreenshot
+import app.criba.pc.isWhatsApp
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -139,8 +149,8 @@ private fun Workspace(app: AppState) {
 }
 
 private fun sectionsFor(mode: Mode) =
-    if (mode == Mode.PHOTOS) listOf(Section.LIBRARY, Section.FOLDERS, Section.CLEAN, Section.ORGANIZE)
-    else listOf(Section.TYPES, Section.TOPICS, Section.CLEAN, Section.ORGANIZE)
+    if (mode == Mode.PHOTOS) listOf(Section.LIBRARY, Section.EXPLORE, Section.CLEAN, Section.ORGANIZE)
+    else listOf(Section.TYPES, Section.TOPICS, Section.EXPLORE, Section.CLEAN, Section.ORGANIZE)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -180,7 +190,7 @@ private fun Sidebar(app: AppState) {
                     Icon(
                         when (s) {
                             Section.LIBRARY -> Icons.Filled.PhotoLibrary
-                            Section.FOLDERS -> Icons.Filled.Folder
+                            Section.EXPLORE -> Icons.Filled.Folder
                             Section.TYPES -> Icons.Filled.Category
                             Section.TOPICS -> Icons.Filled.Topic
                             Section.CLEAN -> Icons.Filled.AutoAwesome
@@ -191,6 +201,17 @@ private fun Sidebar(app: AppState) {
                 },
                 badge = { if (s == Section.CLEAN && suggestedCount > 0) Badge { Text("$suggestedCount") } },
                 modifier = Modifier.heightIn(min = 48.dp),
+            )
+        }
+        TextButton(onClick = { app.showProtected = true }) {
+            Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.size(8.dp))
+            Text(
+                when (val n = app.protectedDirs.size) {
+                    0 -> "Proteger carpetas"
+                    1 -> "1 carpeta protegida"
+                    else -> "$n carpetas protegidas"
+                }
             )
         }
         Spacer(Modifier.weight(1f))
@@ -249,9 +270,9 @@ private fun TopBar(app: AppState) {
             return@Row
         }
         val review = app.review
-        val folder = app.folderFilter
-        if (review != null || folder != null) {
-            IconButton(onClick = { if (review != null) app.review = null else app.folderFilter = null }) {
+        val folder: String? = null
+        if (review != null) {
+            IconButton(onClick = { app.review = null }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
             }
         }
@@ -267,7 +288,7 @@ private fun TopBar(app: AppState) {
             review != null -> null
             folder != null -> "${r.media.count { it.parent == folder }} elementos · $folder"
             app.section == Section.LIBRARY -> "${r.media.size} fotos y videos en ${r.moments.size} momentos"
-            app.section == Section.FOLDERS -> "${r.media.map { it.parent }.distinct().size} carpetas con fotos"
+            app.section == Section.EXPLORE -> "Navega tus carpetas y protege las que no quieres que se toquen"
             app.section == Section.TYPES || app.section == Section.TOPICS -> "${r.docs.size} documentos · ${fmtBytes(r.docBytes)}"
             app.section == Section.CLEAN -> "Revisa lo que sobra antes de eliminar"
             else -> "Mueve tus archivos a carpetas ordenadas"
@@ -276,13 +297,13 @@ private fun TopBar(app: AppState) {
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (sub != null) Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        val gridSection = app.mode == Mode.PHOTOS && (app.section == Section.LIBRARY || folder != null || review != null)
+        val gridSection = (app.mode == Mode.PHOTOS && (app.section == Section.LIBRARY || review != null)) || app.section == Section.EXPLORE
         if (gridSection) {
             Icon(Icons.Filled.Image, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
             Slider(value = app.tileSize, onValueChange = { app.setTile(it) }, valueRange = 110f..320f, modifier = Modifier.width(150.dp))
             Icon(Icons.Filled.Image, contentDescription = "Tamaño de las miniaturas", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
         }
-        val searchable = review == null && app.section in setOf(Section.LIBRARY, Section.FOLDERS, Section.TYPES, Section.TOPICS)
+        val searchable = review == null && app.section in setOf(Section.LIBRARY, Section.EXPLORE, Section.TYPES, Section.TOPICS)
         if (searchable) {
             OutlinedTextField(
                 value = app.query,
@@ -314,8 +335,8 @@ private fun Content(app: AppState) {
             }
         }
         review != null -> ReviewView(app, review)
-        app.section == Section.LIBRARY || (app.section == Section.FOLDERS && app.folderFilter != null) -> LibraryView(app)
-        app.section == Section.FOLDERS -> FoldersView(app)
+        app.section == Section.LIBRARY -> LibraryView(app)
+        app.section == Section.EXPLORE -> ExplorerView(app)
         app.section == Section.TYPES -> DocsGrouped(app, byTopic = false)
         app.section == Section.TOPICS -> DocsGrouped(app, byTopic = true)
         app.section == Section.CLEAN -> CleanView(app)
@@ -323,46 +344,85 @@ private fun Content(app: AppState) {
     }
 }
 
+private val KIND_FILTERS = listOf("Fotos", "Videos", "Capturas", "WhatsApp")
+
+private fun kindMatch(it: Item, f: String?): Boolean = when (f) {
+    null -> true
+    "Fotos" -> it.kind == Kind.PHOTO && !isScreenshot(it)
+    "Videos" -> it.kind == Kind.VIDEO
+    "Capturas" -> isScreenshot(it)
+    "WhatsApp" -> isWhatsApp(it)
+    else -> true
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LibraryView(app: AppState) {
     val r = app.report
     val q = app.query.trim().lowercase()
-    val folder = app.folderFilter
-    val (rows, flat) = remember(r, q, folder) {
-        if (folder != null) {
-            val list = r.media.filter { it.parent == folder && (q.isEmpty() || matches(it, q)) }
-            groupRows(listOf("" to list))
+    val f = app.typeFilter
+    val (rows, flat) = remember(r, q, f) { libraryRows(r.moments, q) { kindMatch(it, f) } }
+    val counts = remember(r) { KIND_FILTERS.map { k -> k to r.media.count { kindMatch(it, k) } }.filter { it.second > 0 } }
+    val years = remember(rows) {
+        val m = LinkedHashMap<Int, Int>()
+        rows.forEachIndexed { i, row -> if (row is HeaderRow && row.big && row.year != 0 && row.year !in m) m[row.year] = i }
+        m.toList()
+    }
+    val state = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
+    SideEffect { app.visibleItems = flat }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(end = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { ChipBar(counts, f) { app.typeFilter = it } }
+            if (years.size > 1) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.widthIn(max = 420.dp)) {
+                    years.forEach { (y, idx) ->
+                        TextButton(onClick = { scope.launch { state.scrollToItem(idx) } }) { Text("$y") }
+                    }
+                }
+            }
+        }
+        if (flat.isEmpty()) {
+            Empty(
+                when {
+                    q.isNotEmpty() -> "Nada coincide con «$q»."
+                    f != null -> "No hay elementos de este tipo."
+                    else -> "No hay fotos ni videos en esta carpeta. Prueba con Documentos o elige otra carpeta."
+                }
+            )
         } else {
-            libraryRows(r.moments, q)
+            Box(Modifier.weight(1f)) { MediaGrid(app, rows, flat, state = state) }
         }
     }
-    SideEffect { app.visibleItems = flat }
-    if (flat.isEmpty()) {
-        Empty(
-            when {
-                q.isNotEmpty() -> "Nada coincide con «$q»."
-                else -> "No hay fotos ni videos en esta carpeta. Prueba con Documentos o elige otra carpeta."
-            }
-        )
-        return
-    }
-    MediaGrid(app, rows, flat)
 }
 
 @Composable
 private fun Dialogs(app: AppState) {
-    app.confirmTrash?.let { list ->
+    app.confirmTrash?.let { all ->
+        val list = all.filterNot { app.isProtected(it) }
+        val skipped = all.size - list.size
         AlertDialog(
             onDismissRequest = { app.confirmTrash = null },
-            title = { Text(if (list.size == 1) "¿Eliminar ${list[0].name}?" else "¿Eliminar ${list.size} archivos?") },
+            title = {
+                Text(
+                    when {
+                        list.isEmpty() -> "Están en carpetas protegidas"
+                        list.size == 1 -> "¿Eliminar ${list[0].name}?"
+                        else -> "¿Eliminar ${list.size} archivos?"
+                    }
+                )
+            },
             text = {
                 Text(
-                    "Ocupan ${fmtBytes(list.sumOf { it.size })}. Van a la Papelera de reciclaje, de donde puedes restaurarlos." +
-                        if (app.isOneDrive) " OneDrive también los manda a su papelera en línea." else ""
+                    if (list.isEmpty()) "Para eliminarlos, primero quita la protección de su carpeta en Explorar."
+                    else "Ocupan ${fmtBytes(list.sumOf { it.size })}. Van a la Papelera de reciclaje, de donde puedes restaurarlos." +
+                        (if (app.isOneDrive) " OneDrive también los manda a su papelera en línea." else "") +
+                        (if (skipped > 0) " $skipped están en carpetas protegidas y no se tocarán." else "")
                 )
             },
             confirmButton = {
                 Button(
+                    enabled = list.isNotEmpty(),
                     onClick = {
                         app.confirmTrash = null
                         app.trash(list)
@@ -373,6 +433,7 @@ private fun Dialogs(app: AppState) {
             dismissButton = { TextButton(onClick = { app.confirmTrash = null }) { Text("Cancelar") } },
         )
     }
+    if (app.showProtected) ProtectedDialog(app)
     app.pendingPlan?.let { plan ->
         AlertDialog(
             onDismissRequest = { app.pendingPlan = null },
@@ -387,4 +448,47 @@ private fun Dialogs(app: AppState) {
             dismissButton = { TextButton(onClick = { app.pendingPlan = null }) { Text("Cancelar") } },
         )
     }
+}
+
+@Composable
+private fun ProtectedDialog(app: AppState) {
+    val root = app.root?.path.orEmpty()
+    val dirs = app.protectedDirs.sortedBy { it.lowercase() }
+    AlertDialog(
+        onDismissRequest = { app.showProtected = false },
+        title = { Text("Carpetas protegidas") },
+        text = {
+            Column(Modifier.widthIn(min = 460.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "Lo que está dentro de estas carpetas nunca se sugiere para eliminar, no se manda a la papelera ni se mueve al ordenar. Las carpetas que parecen proyectos se protegen solas.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (dirs.isEmpty()) {
+                    Text("Aún no hay carpetas protegidas.", modifier = Modifier.padding(vertical = 8.dp))
+                }
+                Column(Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState())) {
+                    dirs.forEach { d ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                                Text(java.io.File(d).name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    d.removePrefix(root).trimStart('\\', '/') + if (app.isAutoProtected(d)) " · proyecto detectado" else "",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            TextButton(onClick = { app.navigate(d); app.showProtected = false }) { Text("Ver") }
+                            TextButton(onClick = { app.setProtected(d, false) }) { Text("Quitar") }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { app.showProtected = false }) { Text("Listo") } },
+        dismissButton = { TextButton(onClick = { app.chooseAndProtect() }) { Text("Proteger otra carpeta…") } },
+    )
 }
