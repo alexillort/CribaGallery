@@ -24,7 +24,13 @@ jobs:
       - name: Compilar APK
         env:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-        run: gradle :androidApp:assembleRelease --stacktrace
+        run: |
+          set -o pipefail
+          gradle :androidApp:assembleRelease --stacktrace 2>&1 | tee build.log
+      - name: Mostrar errores
+        if: failure()
+        run: |
+          grep -E "^e: |What went wrong|Caused by" -A3 build.log | head -60 | while IFS= read -r l; do echo "::error::$l"; done || true
       - name: Preparar archivo
         run: cp androidApp/build/outputs/apk/release/androidApp-release.apk Criba-android.apk
       - uses: actions/upload-artifact@v4
@@ -51,7 +57,13 @@ jobs:
         env:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           PACKAGE_VERSION: 1.0.${{ github.run_number }}
-        run: gradle :desktopApp:packageMsi --stacktrace
+        run: |
+          set -o pipefail
+          gradle :desktopApp:packageMsi --stacktrace 2>&1 | tee build.log
+      - name: Mostrar errores
+        if: failure()
+        run: |
+          grep -E "^e: |What went wrong|Caused by|\* What" -A3 build.log | head -60 | while IFS= read -r l; do echo "::error::$l"; done || true
       - name: Preparar archivo
         run: cp desktopApp/build/compose/binaries/main/msi/*.msi Criba-windows.msi
       - uses: actions/upload-artifact@v4
