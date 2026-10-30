@@ -197,8 +197,8 @@ class AppState(val dataDir: File) {
         scanning = false
         autoDirs = HashSet(l.projectDirs)
         recomputeProtected()
-        val prot = protectedDirs
-        report = withContext(Dispatchers.Default) { Report.build(list, prot) }
+        val prot0 = protectedDirs
+        report = withContext(Dispatchers.Default) { Report.build(list, prot0) }
 
         val todo = list.filter { it.isMedia && !it.analyzed }
         analyzeTotal = todo.size
